@@ -78,6 +78,7 @@ The first time it runs, it copies `mac-cleanup.conf` to `~/.config/mac-cleanup/m
 | `whatsapp_media` | ⛔ off | WhatsApp media older than `WHATSAPP_MEDIA_MAX_AGE_DAYS` | Old media is removed from this Mac. It needs Full Disk Access |
 | `zoom_cache` | ⛔ off | Zoom's auto-updater and webview caches | None. Recordings are kept |
 | `docker_prune` | ⛔ off | `docker system prune -a`, and optionally `--volumes` | Unused images have to be pulled again |
+| `spotlight` | ⛔ off | Erases the Spotlight index (`sudo mdutil -E`), but only when it's bigger than `SPOTLIGHT_MIN_GB` (default 5). Volumes are set with `SPOTLIGHT_VOLUMES`. It asks for your password and is skipped on scheduled runs | macOS rebuilds the index in the background over a few hours: search results are incomplete and CPU use is high until it finishes |
 | `extra_paths` | ⛔ off | Any folders you list in `EXTRA_PATHS` | Whatever those folders hold |
 
 ## Configuration

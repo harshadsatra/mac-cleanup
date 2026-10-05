@@ -23,7 +23,7 @@ CONFIG="${MAC_CLEANUP_CONFIG:-$HOME/.config/mac-cleanup/mac-cleanup.conf}"
 PLIST_LABEL="com.user.mac-cleanup"
 PLIST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 
-ALL_TASKS="browser_cache chrome_webstorage chrome_ai_model claude_cache editor_cache app_cache zoom_cache whatsapp_media xcode android package_caches dev_caches docker_prune user_logs extra_paths"
+ALL_TASKS="browser_cache chrome_webstorage chrome_ai_model claude_cache editor_cache app_cache zoom_cache whatsapp_media xcode android package_caches dev_caches docker_prune user_logs spotlight extra_paths"
 
 # ── Defaults (overridden by config) ──────────────────────────
 DRY_RUN=false; QUIT_APPS=ask; NOTIFY=true
@@ -42,6 +42,7 @@ ENABLE_XCODE=true; ENABLE_ANDROID=true; ANDROID_NDK_KEEP=1; ANDROID_NDK_PIN=""
 ANDROID_CLEAN_GRADLE=true
 ENABLE_PACKAGE_CACHES=true; ENABLE_DOCKER_PRUNE=false; DOCKER_PRUNE_VOLUMES=false
 ENABLE_USER_LOGS=true; LOG_MAX_AGE_DAYS=30
+ENABLE_SPOTLIGHT=false; SPOTLIGHT_MIN_GB=5; SPOTLIGHT_VOLUMES="/"
 ENABLE_EXTRA_PATHS=false; EXTRA_PATHS=()
 EXTRA_PATH=""; CONDA_BIN=""
 SCHEDULE_WEEKDAY=0; SCHEDULE_HOUR=11; SCHEDULE_MINUTE=0
@@ -468,6 +469,38 @@ task_user_logs() {
     info "removed $(human "$kb") of old logs"
   fi
   TASK_FREED=$((TASK_FREED + kb))
+}
+
+desc_spotlight="Rebuild the Spotlight index when it's bigger than SPOTLIGHT_MIN_GB (needs sudo)"
+task_spotlight() {
+  local vol idx kb
+  if ! sudo -n true 2>/dev/null; then
+    # launchd has no terminal to type a password into
+    if is_true "$SCHEDULED"; then warn "Spotlight needs sudo — skipped on scheduled runs"; return; fi
+    info "Spotlight's index belongs to root; sudo asks for your password to check its size"
+    sudo -v || { warn "no sudo — skipped"; return; }
+  fi
+  while IFS= read -r vol; do
+    [ -n "$vol" ] || continue
+    idx="$vol/.Spotlight-V100"
+    [ "$vol" = / ] && idx=/System/Volumes/Data/.Spotlight-V100  # APFS data volume
+    kb=$(sudo -n du -sk "$idx" 2>/dev/null | awk '{print $1}'); kb=${kb:-0}
+    if [ "$kb" -lt $((SPOTLIGHT_MIN_GB * 1048576)) ]; then
+      info "$vol index is $(human "$kb") — under $SPOTLIGHT_MIN_GB GB, left alone"; continue
+    fi
+    if is_true "$DRY_RUN"; then
+      info "would erase and rebuild the $vol index ($(human "$kb"))"
+    elif sudo -n mdutil -E "$vol" >/dev/null 2>&1; then
+      info "erased the $vol index ($(human "$kb")). macOS rebuilds it in the background; search is incomplete for a while"
+      log "spotlight erased $vol $kb KB"
+    else
+      warn "mdutil -E $vol failed"; continue
+    fi
+    # ponytail: counts the full old size; the rebuilt index takes back part of it
+    TASK_FREED=$((TASK_FREED + kb))
+  done <<EOF
+$(echo "$SPOTLIGHT_VOLUMES" | tr ',' '\n')
+EOF
 }
 
 desc_extra_paths="Your own paths from EXTRA_PATHS in the config"
