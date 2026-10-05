@@ -9,7 +9,7 @@
 #    mac-cleanup.sh --only a,b      run only these tasks (ignores enable flags)
 #    mac-cleanup.sh --list          list tasks and whether they're enabled
 #    mac-cleanup.sh --report        show current sizes of everything it manages
-#    mac-cleanup.sh --schedule      run automatically every Sunday at 11:00
+#    mac-cleanup.sh --schedule      run weekly (default Sunday 11:00, see SCHEDULE_*)
 #    mac-cleanup.sh --unschedule    remove the schedule
 #    mac-cleanup.sh --config FILE   use a different config file
 #
@@ -38,6 +38,7 @@ ENABLE_PACKAGE_CACHES=true; ENABLE_DOCKER_PRUNE=false; DOCKER_PRUNE_VOLUMES=fals
 ENABLE_USER_LOGS=true; LOG_MAX_AGE_DAYS=30
 ENABLE_EXTRA_PATHS=false; EXTRA_PATHS=()
 EXTRA_PATH=""; CONDA_BIN=""
+SCHEDULE_WEEKDAY=0; SCHEDULE_HOUR=11; SCHEDULE_MINUTE=0
 
 # ── CLI ──────────────────────────────────────────────────────
 ASSUME_YES=false; SCHEDULED=false; ONLY=""; ACTION=run; CLI_DRY=""
@@ -46,8 +47,9 @@ while [ $# -gt 0 ]; do
     -n|--dry-run)  CLI_DRY=true ;;
     -y|--yes)      ASSUME_YES=true ;;
     --scheduled)   SCHEDULED=true; ASSUME_YES=true ;;
-    --only)        ONLY="$2"; shift ;;
-    --config)      CONFIG="$2"; shift ;;
+    --only|--config)
+      [ -n "$2" ] || { echo "$1 needs a value (try --help)"; exit 1; }
+      if [ "$1" = --only ]; then ONLY="$2"; else CONFIG="$2"; fi; shift ;;
     --list)        ACTION=list ;;
     --report)      ACTION=report ;;
     --schedule)    ACTION=schedule ;;
@@ -56,6 +58,9 @@ while [ $# -gt 0 ]; do
     *) echo "Unknown option: $1 (try --help)"; exit 1 ;;
   esac
   shift
+done
+for t in $(echo "$ONLY" | tr ',' ' '); do
+  case " $ALL_TASKS " in *" $t "*) ;; *) echo "Unknown task: $t (see --list)"; exit 1 ;; esac
 done
 
 # ── Config ───────────────────────────────────────────────────
@@ -70,7 +75,7 @@ fi
 [ -f "$CONFIG" ] && . "$CONFIG"
 [ -n "$CLI_DRY" ] && DRY_RUN=true
 
-export PATH="$EXTRA_PATH:$PATH:/opt/homebrew/bin:/usr/local/bin"
+export PATH="${EXTRA_PATH:+$EXTRA_PATH:}$PATH:/opt/homebrew/bin:/usr/local/bin"
 # Make nvm-managed node/npm available (needed for scheduled runs)
 if [ -s "$HOME/.nvm/nvm.sh" ] && ! command -v npm >/dev/null 2>&1; then
   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
@@ -98,6 +103,7 @@ size_kb() { # total KB of the given paths (missing paths = 0)
   done
   echo "$t"
 }
+TILDE='~'  # bash 3.2 prints a literal backslash for ${p/#$HOME/\~}
 is_true() { case "$1" in true|yes|1|on) return 0 ;; *) return 1 ;; esac; }
 upper()   { echo "$1" | tr '[:lower:]' '[:upper:]'; }
 
@@ -105,22 +111,25 @@ TASK_FREED=0
 TOTAL_FREED=0
 SUMMARY=""
 
-# Delete paths safely: only inside $HOME, never $HOME itself, no "..".
+# Delete paths safely: only inside $HOME, never $HOME itself, no "..", "." or "//".
 rmp() {
   local p kb
   for p in "$@"; do
+    # trailing slashes would let "$HOME//" through and make rm follow symlinks
+    while [ "${p%/}" != "$p" ]; do p="${p%/}"; done
     [ -e "$p" ] || continue
     case "$p" in
       "$HOME"/?*) ;;
       *) warn "refusing to delete outside home: $p"; continue ;;
     esac
-    case "$p" in *"/../"*|*"/..") warn "refusing path with ..: $p"; continue ;; esac
+    case "$p" in *"/../"*|*"/.."|*"/./"*|*"/."|*"//"*) warn "refusing unsafe path: $p"; continue ;; esac
     kb=$(size_kb "$p")
     if is_true "$DRY_RUN"; then
-      info "would remove $(human "$kb")  ${p/#$HOME/\~}"
+      info "would remove $(human "$kb")  ${p/#$HOME/$TILDE}"
     else
-      rm -rf "$p" 2>/dev/null || warn "could not fully remove ${p/#$HOME/\~} (Full Disk Access?)"
-      info "removed $(human "$kb")  ${p/#$HOME/\~}"
+      rm -rf "$p" 2>/dev/null || warn "could not fully remove ${p/#$HOME/$TILDE} (Full Disk Access?)"
+      kb=$((kb - $(size_kb "$p")))
+      info "removed $(human "$kb")  ${p/#$HOME/$TILDE}"
       log "removed $kb KB $p"
     fi
     TASK_FREED=$((TASK_FREED + kb))
@@ -292,10 +301,11 @@ task_android() {
     info "NDK: $count installed, keeping $(echo $keep | tr ' ' ',')${ANDROID_NDK_PIN:+ + pinned $ANDROID_NDK_PIN}"
   fi
   if is_true "$ANDROID_CLEAN_GRADLE"; then
+    ensure_closed "Android Studio" || return
+    # pkill, not `gradle --stop`: that only stops daemons of its own Gradle version
     if pgrep -f GradleDaemon >/dev/null 2>&1; then
       if is_true "$DRY_RUN"; then info "(Gradle daemon running — would stop it)"
-      elif command -v gradle >/dev/null 2>&1; then gradle --stop >/dev/null 2>&1
-      else pkill -f GradleDaemon 2>/dev/null; fi
+      else pkill -f GradleDaemon 2>/dev/null; sleep 1; fi
     fi
     rmp "$HOME/.gradle/caches" "$HOME/.gradle/daemon"
   fi
@@ -366,7 +376,7 @@ task_enabled() {
 }
 
 cmd_list() {
-  say "${B}Tasks${N}  ${D}(config: ${CONFIG/#$HOME/\~})${N}"
+  say "${B}Tasks${N}  ${D}(config: ${CONFIG/#$HOME/$TILDE})${N}"
   local t d
   for t in $ALL_TASKS; do
     eval "d=\$desc_$t"
@@ -415,14 +425,14 @@ cmd_schedule() {
     <string>--scheduled</string><string>--config</string><string>$CONFIG</string>
   </array>
   <key>StartCalendarInterval</key><dict>
-    <key>Weekday</key><integer>0</integer><key>Hour</key><integer>11</integer><key>Minute</key><integer>0</integer>
+    <key>Weekday</key><integer>$SCHEDULE_WEEKDAY</integer><key>Hour</key><integer>$SCHEDULE_HOUR</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer>
   </dict>
   <key>StandardOutPath</key><string>$HOME/Library/Logs/mac-cleanup.out.log</string>
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/mac-cleanup.out.log</string>
 </dict></plist>
 EOF
   launchctl unload "$PLIST" 2>/dev/null
-  launchctl load "$PLIST" && say "${G}Scheduled:${N} every Sunday at 11:00. Edit the time in ${PLIST/#$HOME/\~}"
+  launchctl load "$PLIST" && say "${G}Scheduled:${N} weekday $SCHEDULE_WEEKDAY (0=Sun) at $SCHEDULE_HOUR:$(printf %02d "$SCHEDULE_MINUTE"). Change SCHEDULE_* in the config and rerun --schedule"
   say "${D}Scheduled runs skip any app that is open instead of quitting it.${N}"
 }
 

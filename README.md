@@ -34,13 +34,15 @@ Summary
 ## Install
 
 ```bash
-git clone https://github.com/<you>/mac-cleanup.git ~/Desktop/dev_server/mac-cleanup
-cd ~/Desktop/dev_server/mac-cleanup
+git clone https://github.com/<you>/mac-cleanup.git ~/.local/share/mac-cleanup
+cd ~/.local/share/mac-cleanup
 chmod +x mac-cleanup.sh
 
 # optional: a short alias
 echo "alias cleanup=\"$PWD/mac-cleanup.sh\"" >> ~/.zshrc && source ~/.zshrc
 ```
+
+Avoid cloning into `~/Desktop`, `~/Documents` or `~/Downloads` if you plan to schedule it: macOS blocks launchd from reading those folders, so the weekly run fails silently.
 
 The first time it runs, it copies `mac-cleanup.conf` to `~/.config/mac-cleanup/mac-cleanup.conf`. **Edit that copy**, so your settings stay out of the repo and survive a `git pull`.
 
@@ -54,7 +56,7 @@ The first time it runs, it copies `mac-cleanup.conf` to `~/.config/mac-cleanup/m
 | `cleanup --only chrome_cache,xcode` | Run only the tasks you name, whatever the config says. |
 | `cleanup --list` | List tasks and whether each is enabled. |
 | `cleanup --report` | Show the current size of everything it manages. |
-| `cleanup --schedule` | Run automatically every Sunday at 11:00. |
+| `cleanup --schedule` | Run automatically every week (Sunday 11:00 by default). |
 | `cleanup --unschedule` | Remove the schedule. |
 | `cleanup --config FILE` | Use a different config file. |
 
@@ -114,7 +116,7 @@ See [`mac-cleanup.conf`](mac-cleanup.conf) for every option.
 cleanup --schedule
 ```
 
-This creates `~/Library/LaunchAgents/com.user.mac-cleanup.plist`, which runs every Sunday at 11:00. To change the time, edit `StartCalendarInterval` in that file and run `cleanup --schedule` again.
+This creates `~/Library/LaunchAgents/com.user.mac-cleanup.plist`, which runs every Sunday at 11:00. To change the time, set `SCHEDULE_WEEKDAY`, `SCHEDULE_HOUR` and `SCHEDULE_MINUTE` in the config and run `cleanup --schedule` again.
 
 On scheduled runs, any app that's open is skipped rather than quit. Output goes to `~/Library/Logs/mac-cleanup.out.log`.
 
@@ -122,6 +124,7 @@ On scheduled runs, any app that's open is skipped rather than quit. Output goes 
 
 - **"Operation not permitted":** macOS protects other apps' containers, such as WhatsApp. Turn on Full Disk Access for Terminal (System Settings → Privacy & Security → Full Disk Access) and restart Terminal.
 - **A scheduled run can't find `pnpm`, `npm` or `conda`:** launchd uses a minimal `PATH`. Add the right folders to `EXTRA_PATH` in the config, or set `CONDA_BIN`. If `npm` isn't on the `PATH`, the script loads nvm automatically.
+- **The scheduled run never does anything:** check `~/Library/Logs/mac-cleanup.out.log`. If it says "Operation not permitted", the script is in a protected folder (Desktop, Documents, Downloads). Move the repo and run `cleanup --schedule` again.
 - **Colima's disk file didn't shrink after a Docker prune:** the disk image (`~/.colima`) only shrinks after `colima stop && colima start`. To reclaim all of it, run `colima delete`.
 - **System Settings still shows the old size:** the Storage panel takes a few minutes to update, and restarting your Mac clears swap and temporary files too.
 
