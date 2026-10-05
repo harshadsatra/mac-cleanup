@@ -23,14 +23,20 @@ CONFIG="${MAC_CLEANUP_CONFIG:-$HOME/.config/mac-cleanup/mac-cleanup.conf}"
 PLIST_LABEL="com.user.mac-cleanup"
 PLIST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 
-ALL_TASKS="chrome_cache chrome_webstorage chrome_ai_model claude_cache editor_cache zoom_cache whatsapp_media xcode android package_caches docker_prune user_logs extra_paths"
+ALL_TASKS="browser_cache chrome_webstorage chrome_ai_model claude_cache editor_cache app_cache zoom_cache whatsapp_media xcode android package_caches dev_caches docker_prune user_logs extra_paths"
 
 # ── Defaults (overridden by config) ──────────────────────────
 DRY_RUN=false; QUIT_APPS=ask; NOTIFY=true
 LOG_FILE="$HOME/Library/Logs/mac-cleanup.log"
-ENABLE_CHROME_CACHE=true; ENABLE_CHROME_WEBSTORAGE=false; ENABLE_CHROME_AI_MODEL=true
+ENABLE_BROWSER_CACHE=""  # empty = follow the old ENABLE_CHROME_CACHE (see below)
+BROWSERS="chrome brave edge arc vivaldi opera chromium"
+ENABLE_CHROME_WEBSTORAGE=false; ENABLE_CHROME_AI_MODEL=true
 CHROME_PROFILES_ONLY=""
 ENABLE_CLAUDE_CACHE=true; ENABLE_EDITOR_CACHE=true; ENABLE_ZOOM_CACHE=false
+ENABLE_APP_CACHE=true
+APPS="slack discord teams notion figma postman linear obsidian github_desktop spotify"
+ENABLE_DEV_CACHES=true
+DEV_CACHES="bun deno yarn_berry uv poetry go cargo composer cocoapods swiftpm carthage expo electron node_gyp prisma corepack"
 ENABLE_WHATSAPP_MEDIA=false; WHATSAPP_MEDIA_MAX_AGE_DAYS=30
 ENABLE_XCODE=true; ENABLE_ANDROID=true; ANDROID_NDK_KEEP=1; ANDROID_NDK_PIN=""
 ANDROID_CLEAN_GRADLE=true
@@ -59,6 +65,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+ONLY="$(echo "$ONLY" | sed 's/chrome_cache/browser_cache/')"  # old task name
 for t in $(echo "$ONLY" | tr ',' ' '); do
   case " $ALL_TASKS " in *" $t "*) ;; *) echo "Unknown task: $t (see --list)"; exit 1 ;; esac
 done
@@ -74,6 +81,8 @@ fi
 # shellcheck disable=SC1090
 [ -f "$CONFIG" ] && . "$CONFIG"
 [ -n "$CLI_DRY" ] && DRY_RUN=true
+# chrome_cache was renamed to browser_cache; keep honouring old configs
+[ -z "$ENABLE_BROWSER_CACHE" ] && ENABLE_BROWSER_CACHE="${ENABLE_CHROME_CACHE:-true}"
 
 export PATH="${EXTRA_PATH:+$EXTRA_PATH:}$PATH:/opt/homebrew/bin:/usr/local/bin"
 # Make nvm-managed node/npm available (needed for scheduled runs)
@@ -174,11 +183,23 @@ ensure_closed() {
 }
 
 # ── Tasks ────────────────────────────────────────────────────
-CHROME="$HOME/Library/Application Support/Google/Chrome"
+AS="$HOME/Library/Application Support"
+CA="$HOME/Library/Caches"
+CHROME="$AS/Google/Chrome"
 
-chrome_profiles() { # prints profile dirs, one per line
-  local d name
-  for d in "$CHROME/Default" "$CHROME"/Profile\ *; do
+# Cache folder names shared by Chromium browsers and Electron apps (never logins or site data)
+CHROMIUM_CACHE_DIRS="Cache|Code Cache|GPUCache|DawnCache|DawnGraphiteCache|DawnWebGPUCache|Service Worker/CacheStorage|Service Worker/ScriptCache"
+
+rm_cache_dirs() { # rm_cache_dirs <dir>: remove the CHROMIUM_CACHE_DIRS inside it
+  local sub
+  while IFS= read -r sub; do rmp "$1/$sub"; done <<EOF
+$(echo "$CHROMIUM_CACHE_DIRS" | tr '|' '\n')
+EOF
+}
+
+chrome_profiles() { # chrome_profiles [root]: prints profile dirs, one per line
+  local root="${1:-$CHROME}" d name
+  for d in "$root/Default" "$root"/Profile\ *; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
     if [ -n "$CHROME_PROFILES_ONLY" ]; then
@@ -188,20 +209,108 @@ chrome_profiles() { # prints profile dirs, one per line
   done
 }
 
-desc_chrome_cache="Chrome caches in every profile (keeps logins, history, site data)"
-task_chrome_cache() {
-  [ -d "$CHROME" ] || { info "Chrome not found"; return; }
-  ensure_closed "Google Chrome" || return
-  local p
-  while IFS= read -r p; do
-    rmp "$p/Cache" "$p/Code Cache" "$p/GPUCache" "$p/DawnCache" "$p/DawnGraphiteCache" \
-        "$p/DawnWebGPUCache" "$p/Service Worker/CacheStorage" "$p/Service Worker/ScriptCache"
-  done <<EOF
-$(chrome_profiles)
+# key | app name (to quit) | profile root | extra cache paths (;-separated, removed whole)
+# Missing browsers are skipped. Add a Chromium browser with one line.
+BROWSER_TABLE="chrome|Google Chrome|$CHROME|$CA/Google/Chrome;$AS/Google/GoogleUpdater/crx_cache
+brave|Brave Browser|$AS/BraveSoftware/Brave-Browser|$CA/BraveSoftware/Brave-Browser;$CA/com.brave.Browser
+edge|Microsoft Edge|$AS/Microsoft Edge|$CA/Microsoft Edge;$CA/com.microsoft.edgemac
+arc|Arc|$AS/Arc/User Data|$CA/Arc;$CA/company.thebrowser.Browser
+vivaldi|Vivaldi|$AS/Vivaldi|$CA/Vivaldi;$CA/com.vivaldi.Vivaldi
+opera|Opera|$AS/com.operasoftware.Opera|$CA/com.operasoftware.Opera
+chromium|Chromium|$AS/Chromium|$CA/Chromium;$CA/org.chromium.Chromium"
+
+desc_browser_cache="Chromium browser caches: Chrome, Brave, Edge, Arc, Vivaldi, Opera (keeps logins, history, site data)"
+task_browser_cache() {
+  local key app root extra p found=0
+  while IFS='|' read -r key app root extra; do
+    case " $BROWSERS " in *" $key "*) ;; *) continue ;; esac
+    [ -d "$root" ] || continue
+    found=1; info "$app"
+    ensure_closed "$app" || continue
+    while IFS= read -r p; do rm_cache_dirs "$p"; done <<EOF
+$(chrome_profiles "$root")
 EOF
-  rmp "$CHROME/GrShaderCache" "$CHROME/GraphiteDawnCache" "$CHROME/ShaderCache" \
-      "$CHROME/component_crx_cache" "$HOME/Library/Application Support/Google/GoogleUpdater/crx_cache"
-  local c; for c in "$HOME/Library/Caches/Google/Chrome"/*; do rmp "$c"; done
+    rmp "$root/GrShaderCache" "$root/GraphiteDawnCache" "$root/ShaderCache" "$root/component_crx_cache"
+    while IFS= read -r p; do [ -n "$p" ] && rmp "$p"; done <<EOF
+$(echo "$extra" | tr ';' '\n')
+EOF
+  done <<EOF
+$BROWSER_TABLE
+EOF
+  [ $found -eq 1 ] || info "no supported browser found"
+}
+
+# key | app name (to quit) | data dir with Electron cache folders (or -) | extra cache paths (;-separated)
+APP_TABLE="slack|Slack|$AS/Slack|$CA/com.tinyspeck.slackmacgap
+discord|Discord|$AS/discord|$CA/com.hnc.Discord
+teams|Microsoft Teams|-|$HOME/Library/Containers/com.microsoft.teams2/Data/Library/Caches
+notion|Notion|$AS/Notion|$CA/notion.id
+figma|Figma|$AS/Figma|$CA/com.figma.Desktop
+postman|Postman|$AS/Postman|$CA/com.postmanlabs.mac
+linear|Linear|$AS/Linear|$CA/com.linear
+obsidian|Obsidian|$AS/obsidian|$CA/md.obsidian
+github_desktop|GitHub Desktop|$AS/GitHub Desktop|$CA/com.github.GitHubClient
+spotify|Spotify|-|$CA/com.spotify.client"
+
+desc_app_cache="Slack, Discord, Teams, Notion, Figma, Postman, Spotify… caches (keeps logins, data)"
+task_app_cache() {
+  local key app dir extra p any found=0
+  while IFS='|' read -r key app dir extra; do
+    case " $APPS " in *" $key "*) ;; *) continue ;; esac
+    any=0; [ "$dir" != - ] && [ -d "$dir" ] && any=1
+    while IFS= read -r p; do [ -n "$p" ] && [ -e "$p" ] && any=1; done <<EOF
+$(echo "$extra" | tr ';' '\n')
+EOF
+    [ $any -eq 1 ] || continue
+    found=1; info "$app"
+    ensure_closed "$app" || continue
+    [ "$dir" != - ] && rm_cache_dirs "$dir"
+    while IFS= read -r p; do [ -n "$p" ] && rmp "$p"; done <<EOF
+$(echo "$extra" | tr ';' '\n')
+EOF
+  done <<EOF
+$APP_TABLE
+EOF
+  [ $found -eq 1 ] || info "none of the listed apps found"
+}
+
+# dev_cache <key> "<command or empty>" <path>...
+# Uses the tool's own clean command when installed, otherwise removes the paths.
+dev_cache() {
+  local key="$1" cmd="$2" p any=0; shift 2
+  case " $DEV_CACHES " in *" $key "*) ;; *) return ;; esac
+  for p in "$@"; do [ -e "$p" ] && any=1; done
+  [ $any -eq 1 ] || return
+  if [ -n "$cmd" ] && command -v "${cmd%% *}" >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    run_measured "$key" "$1" $cmd
+  else
+    rmp "$@"
+  fi
+}
+
+desc_dev_caches="Bun, Deno, uv, Go, Cargo, CocoaPods, SwiftPM, Expo, Electron… download caches"
+task_dev_caches() {
+  dev_cache bun        "bun pm cache rm"   "$HOME/.bun/install/cache"
+  dev_cache deno       "deno clean"        "$CA/deno"
+  dev_cache yarn_berry ""                  "$HOME/.yarn/berry/cache"
+  dev_cache uv         "uv cache clean"    "$HOME/.cache/uv"
+  dev_cache poetry     ""                  "$CA/pypoetry/cache" "$CA/pypoetry/artifacts"  # not virtualenvs
+  dev_cache go         "go clean -cache"   "$CA/go-build"
+  dev_cache cargo      ""                  "$HOME/.cargo/registry/cache" "$HOME/.cargo/git/db"
+  dev_cache composer   ""                  "$HOME/.composer/cache" "$CA/composer"
+  dev_cache cocoapods  ""                  "$CA/CocoaPods" "$HOME/.cocoapods/repos/master"  # legacy specs repo only
+  dev_cache swiftpm    ""                  "$CA/org.swift.swiftpm"
+  dev_cache carthage   ""                  "$CA/org.carthage.CarthageKit"
+  dev_cache expo       ""                  "$HOME/.expo/ios-simulator-app-cache" "$HOME/.expo/android-apk-cache" "$HOME/.expo/expo-go"
+  dev_cache electron   ""                  "$CA/electron" "$CA/electron-builder"
+  dev_cache node_gyp   ""                  "$CA/node-gyp"
+  dev_cache prisma     ""                  "$HOME/.cache/prisma"
+  dev_cache corepack   ""                  "$HOME/.cache/node/corepack"
+  # Not in the default DEV_CACHES: these are NOT re-downloaded automatically
+  dev_cache playwright ""                  "$CA/ms-playwright"     # npx playwright install
+  dev_cache puppeteer  ""                  "$HOME/.cache/puppeteer" # npx puppeteer browsers install
+  dev_cache cypress    ""                  "$CA/Cypress"            # npx cypress install
 }
 
 desc_chrome_webstorage="Chrome site data / WebStorage (may sign you out of web apps)"

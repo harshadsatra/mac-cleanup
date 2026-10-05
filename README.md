@@ -2,19 +2,19 @@
 
 A configurable cleanup script for macOS developers. It removes caches and build data that rebuild themselves, so your Mac stays light without your logins, settings or projects being touched.
 
-It's built for a typical web and mobile dev setup: Chrome, Claude, VS Code and Cursor, Xcode, Android and React Native, Node package managers, conda, Homebrew and Docker/Colima.
+It's built for a typical web and mobile dev setup: Chrome, Brave and other Chromium browsers, Claude, VS Code and Cursor, Slack/Discord/Notion-style apps, Xcode, Android and React Native/Expo, Node, Python, Go and Rust tooling, Homebrew and Docker/Colima.
 
 ```
 mac-cleanup  Cleaning
 
-▸ chrome_cache — Chrome caches in every profile (keeps logins, history, site data)
+▸ browser_cache — Chromium browser caches: Chrome, Brave, Edge, Arc, Vivaldi, Opera (keeps logins, history, site data)
   removed 1.2 GB  ~/Library/Caches/Google/Chrome/Default
 ▸ android — Old Android NDK versions + Gradle caches
   removed 2.1 GB  ~/Library/Android/sdk/ndk/25.1.8937393
   NDK: 5 installed, keeping 27.1.12297006
 ...
 Summary
-  chrome_cache          1.9 GB
+  browser_cache         1.9 GB
   android               9.8 GB
   package_caches        6.4 GB
   Freed: 18.1 GB
@@ -25,7 +25,7 @@ Summary
 - **Configurable.** Turn each task on or off in one config file.
 - **Dry-run mode.** See exactly what would be removed and how big it is before deleting anything.
 - **Safe by default.** Only caches that rebuild themselves are on out of the box. Anything that could sign you out or lose data is off until you turn it on.
-- **Handles open apps.** It asks before quitting Chrome, Claude or your editors. Scheduled runs skip any app that's open instead of quitting it.
+- **Handles open apps.** It asks before quitting a browser, Claude, your editors or other apps. Scheduled runs skip any app that's open instead of quitting it.
 - **Weekly schedule.** One command sets it to run every week, using a macOS LaunchAgent.
 - **Guard rails.** It refuses to delete anything outside your home folder and never follows `..` in a path.
 - **Logging and notifications.** Each run is logged to `~/Library/Logs/mac-cleanup.log`, and macOS shows a notification with how much it freed.
@@ -53,7 +53,7 @@ The first time it runs, it copies `mac-cleanup.conf` to `~/.config/mac-cleanup/m
 | `cleanup --dry-run` | Show what would be removed, without deleting anything. Start here. |
 | `cleanup` | Run all enabled tasks. It asks before quitting apps. |
 | `cleanup --yes` | Run without prompts. Apps are quit if `QUIT_APPS` allows it. |
-| `cleanup --only chrome_cache,xcode` | Run only the tasks you name, whatever the config says. |
+| `cleanup --only browser_cache,xcode` | Run only the tasks you name, whatever the config says. |
 | `cleanup --list` | List tasks and whether each is enabled. |
 | `cleanup --report` | Show the current size of everything it manages. |
 | `cleanup --schedule` | Run automatically every week (Sunday 11:00 by default). |
@@ -64,13 +64,15 @@ The first time it runs, it copies `mac-cleanup.conf` to `~/.config/mac-cleanup/m
 
 | Task | Default | What it removes | Side effects |
 |---|---|---|---|
-| `chrome_cache` | ✅ on | Cache, Code Cache, GPU and shader caches and service-worker caches in every profile, plus `~/Library/Caches/Google/Chrome` | Sites load slightly slower once |
+| `browser_cache` | ✅ on | Cache, Code Cache, GPU and shader caches and service-worker caches in every profile of Chrome, Brave, Edge, Arc, Vivaldi, Opera and Chromium (pick with `BROWSERS`), plus each browser's `~/Library/Caches` folder. Formerly `chrome_cache`; old configs still work | Sites load slightly slower once |
 | `chrome_ai_model` | ✅ on | The Gemini Nano model (`OptGuideOnDeviceModel/weights.bin`, about 4 GB). It also sets the `GenAILocalFoundationalModelSettings=1` policy so the model isn't downloaded again | Chrome's on-device AI features are turned off, and Chrome shows "Managed by your organization" |
 | `claude_cache` | ✅ on | Claude desktop caches. **It never touches `vm_bundles`** (the Cowork VM) | None |
 | `editor_cache` | ✅ on | VS Code and Cursor caches and logs. Settings, extensions and workspace history are kept | None |
 | `xcode` | ✅ on | `DerivedData`, simulator caches, `iOS DeviceSupport`, and simulators for iOS versions that are no longer installed | The next build is a full build |
 | `android` | ✅ on | Old NDK versions (it keeps the newest `ANDROID_NDK_KEEP`, plus any pinned versions) and `~/.gradle/caches` | Gradle downloads dependencies again on the next build |
 | `package_caches` | ✅ on | `pnpm store prune`, plus clearing the npm, yarn, pip, conda and Homebrew caches | Packages download again when a project needs them |
+| `app_cache` | ✅ on | The same cache folders for Slack, Discord, Teams, Notion, Figma, Postman, Linear, Obsidian, GitHub Desktop and Spotify (pick with `APPS`) | None. Logins and data are kept |
+| `dev_caches` | ✅ on | Download caches for Bun, Deno, Yarn Berry, uv, Poetry (not its virtualenvs), Go build, Cargo, Composer, CocoaPods, SwiftPM, Carthage, Expo, Electron, node-gyp, Prisma and Corepack (pick with `DEV_CACHES`). `playwright`, `puppeteer` and `cypress` can be added, but you must reinstall their browsers afterwards | Downloaded again on demand |
 | `user_logs` | ✅ on | Files in `~/Library/Logs` older than `LOG_MAX_AGE_DAYS` | None |
 | `chrome_webstorage` | ⛔ off | Chrome site data (IndexedDB and offline storage) in each profile | **May sign you out of web apps** (WhatsApp Web, Slack and similar) |
 | `whatsapp_media` | ⛔ off | WhatsApp media older than `WHATSAPP_MEDIA_MAX_AGE_DAYS` | Old media is removed from this Mac. It needs Full Disk Access |
@@ -87,7 +89,8 @@ DRY_RUN=false            # true = never delete, only report
 QUIT_APPS=ask            # ask | yes | no
 NOTIFY=true              # macOS notification when a run finishes
 
-ENABLE_CHROME_CACHE=true
+ENABLE_BROWSER_CACHE=true
+BROWSERS="chrome brave edge arc vivaldi opera chromium"
 CHROME_PROFILES_ONLY=""  # e.g. "Default,Profile 6"; empty means all profiles
 
 ENABLE_ANDROID=true
